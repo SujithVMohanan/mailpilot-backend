@@ -93,6 +93,7 @@ DB_PASSWORD="your-postgres-password"
 DB_HOST="localhost"
 DB_PORT="5432"
 DB_CONN_MAX_AGE="60"
+CELERY_BROKER_URL="redis://localhost:6379/0"
 
 # Timezone & CORS
 TIME_ZONE=Asia/Kolkata
@@ -156,6 +157,22 @@ python manage.py seed_sample_rules
 python manage.py runserver 127.0.0.1:8000
 ```
 
+- In separate terminals, start Redis, a Celery worker, and Celery Beat. On Windows, use the `solo` worker pool:
+
+```powershell
+docker run --rm --name mailpilot-redis -p 6379:6379 redis:7-alpine
+```
+
+```powershell
+.\venv\Scripts\Activate.ps1
+celery -A config worker --pool=solo --loglevel=info
+```
+
+```powershell
+.\venv\Scripts\Activate.ps1
+celery -A config beat --loglevel=info
+```
+
 - Backend API: `http://127.0.0.1:8000/api/`
 - Interactive Swagger Documentation: `http://127.0.0.1:8000/api/docs/`
 - ReDoc Documentation: `http://127.0.0.1:8000/api/docs/redoc/`
@@ -190,7 +207,9 @@ npm run dev
 - `POST /api/mail/oauth/callback/` — Exchange code and state for credentials
 - `POST /api/mail/disconnect/` — Revoke and remove Gmail account link
 - `GET /api/mail/labels/` — Retrieve user's Gmail labels
-- `POST /api/mail/sync/` — Fetch and store inbox emails (`max_results`)
+- `POST /api/mail/sync/` — Queue an immediate inbox sync (`max_results`); returns `202` while it runs
+- `GET /api/mail/sync/` — Read sync status, trigger, start/completion times, last successful sync, and next scheduled sync
+- Automatic sync — Active Gmail accounts are queued every five minutes after the previous run completes; worker and manual requests share the same per-account lock and Celery task
 - `GET /api/mail/` — Search & list emails (`search`, `is_read`, `ordering`, `page`, `limit`)
 - `GET /api/mail/<id>/` — Retrieve full email details including body HTML
 - `GET /api/mail/stats/` — Dashboard metrics (counts, active rules, recent runs)

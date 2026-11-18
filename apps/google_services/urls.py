@@ -5,10 +5,10 @@ from apps.google_services.views import (
     DisconnectGmailView,
     EmailDetailView,
     EmailListView,
-    GmailLabelsView, 
-    OAuthCallbackView, 
+    GmailLabelsView,
+    OAuthCallbackView,
     OAuthInitiateView,
-    SyncEmailsView
+    SyncEmailsView,
 )
 
 

@@ -17,6 +17,7 @@ class EmailListSchema(serializers.ModelSerializer):
             "subject",
             "snippet",
             "received_datetime",
+            "last_synced_at",
             "is_read",
             "label_ids",
         )
@@ -38,6 +39,7 @@ class EmailDetailSchema(serializers.ModelSerializer):
             "body_text",
             "body_html",
             "received_datetime",
+            "last_synced_at",
             "is_read",
             "label_ids",
             "created_at",

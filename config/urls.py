@@ -36,12 +36,8 @@ urlpatterns = [
                
                 path("users/", include("apps.users.urls")),
                 path("mail/", include("apps.google_services.urls")),
+                path("v1/mail/", include("apps.google_services.v1_urls")),
                 path("rules/", include("apps.rule.urls")),
-
-
-
-
-
 
 
                 re_path(

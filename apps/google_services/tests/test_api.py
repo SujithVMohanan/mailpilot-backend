@@ -2,11 +2,17 @@ from datetime import timedelta
 from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
+from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from apps.google_services.models import Email, GmailAccount
+from apps.google_services.services.sync_service import EmailSyncService
+from apps.google_services.tasks import (
+    enqueue_due_gmail_syncs,
+    sync_gmail_for_account,
+)
 from apps.rule.models import EmailRule
 from core.utils.tokens import issue_tokens
 
@@ -28,14 +34,16 @@ class GmailApiTests(APITestCase):
             HTTP_AUTHORIZATION=f"Bearer {issue_tokens(self.user)['access']}"
         )
 
-    def create_account(self, user=None, active=True):
-        return GmailAccount.objects.create(
-            user=user or self.user,
-            email_address="owner@gmail.com",
-            access_token="test-access-token",
-            refresh_token="test-refresh-token",
-            is_active=active,
-        )
+    def create_account(self, user=None, active=True, **overrides):
+        values = {
+            "user": user or self.user,
+            "email_address": "owner@gmail.com",
+            "access_token": "test-access-token",
+            "refresh_token": "test-refresh-token",
+            "is_active": active,
+        }
+        values.update(overrides)
+        return GmailAccount.objects.create(**values)
 
     def create_email(self, account, **overrides):
         values = {
@@ -49,6 +57,7 @@ class GmailApiTests(APITestCase):
             "body_text": "The project is on schedule.",
             "body_html": "<p>The project is on schedule.</p>",
             "received_datetime": timezone.now() - timedelta(hours=1),
+            "last_synced_at": timezone.now() - timedelta(minutes=5),
             "is_read": False,
             "label_ids": ["INBOX", "UNREAD"],
         }
@@ -163,16 +172,30 @@ class GmailApiTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
-    @patch("apps.google_services.views.EmailSyncService")
-    def test_sync_returns_sync_counts(self, sync_service_class):
-        self.create_account()
-        sync_service_class.return_value.sync_inbox.return_value = {
-            "synced_count": 1,
-            "new_count": 1,
-            "updated_count": 0,
-            "failed_count": 0,
-            "next_page_token": None,
-        }
+    @patch("apps.google_services.services.sync_service.GmailClient")
+    def test_sync_records_each_email_sync_timestamp(self, gmail_client):
+        account = self.create_account()
+        sync_service = EmailSyncService(account)
+        sync_started_at = timezone.now()
+
+        sync_service._save_message(
+            {
+                "id": "synced-message",
+                "payload": {"headers": []},
+                "snippet": "Synced message",
+            }
+        )
+
+        email = Email.objects.get(
+            account=account,
+            gmail_message_id="synced-message",
+        )
+        self.assertIsNotNone(email.last_synced_at)
+        self.assertGreaterEqual(email.last_synced_at, sync_started_at)
+
+    @patch("apps.google_services.tasks.sync_gmail_for_account.delay")
+    def test_sync_now_queues_gmail_sync(self, enqueue):
+        account = self.create_account()
 
         response = self.client.post(
             "/api/mail/sync/",
@@ -180,12 +203,170 @@ class GmailApiTests(APITestCase):
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["data"]["synced_count"], 1)
-        sync_service_class.return_value.sync_inbox.assert_called_once_with(
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(response.data["data"]["sync_status"], "QUEUED")
+        self.assertEqual(response.data["data"]["sync_trigger"], "MANUAL")
+        enqueue.assert_called_once_with(
+            account.pk,
             max_results=25,
             page_token=None,
         )
+
+    @patch("apps.google_services.tasks.sync_gmail_for_account.delay")
+    def test_sync_now_rejects_automatic_sync_already_running(self, enqueue):
+        account = self.create_account(
+            sync_status=GmailAccount.SyncStatus.RUNNING,
+            sync_trigger=GmailAccount.SyncTrigger.AUTOMATIC,
+            sync_started_at=timezone.now(),
+        )
+
+        response = self.client.post("/api/mail/sync/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(
+            response.data["code"],
+            "EMAIL_SYNC_ALREADY_IN_PROGRESS",
+        )
+        self.assertEqual(
+            response.data["errors"]["sync_status"],
+            GmailAccount.SyncStatus.RUNNING,
+        )
+        enqueue.assert_not_called()
+
+    @patch("apps.google_services.tasks.sync_gmail_for_account.delay")
+    def test_scheduler_enqueues_active_accounts_and_skips_running(self, enqueue):
+        due_account = self.create_account()
+        self.create_account(
+            self.other_user,
+            sync_status=GmailAccount.SyncStatus.RUNNING,
+        )
+        self.create_account(
+            user=User.objects.create_user(email="queued@example.com"),
+            sync_status=GmailAccount.SyncStatus.QUEUED,
+            sync_trigger=GmailAccount.SyncTrigger.MANUAL,
+        )
+        self.create_account(
+            active=False,
+            user=User.objects.create_user(email="inactive@example.com"),
+        )
+
+        result = enqueue_due_gmail_syncs.run()
+
+        self.assertEqual(result, {"queued_count": 1})
+        enqueue.assert_called_once_with(
+            due_account.pk,
+            max_results=50,
+            page_token=None,
+        )
+        due_account.refresh_from_db()
+        self.assertEqual(due_account.sync_status, GmailAccount.SyncStatus.QUEUED)
+        self.assertEqual(
+            due_account.sync_trigger,
+            GmailAccount.SyncTrigger.AUTOMATIC,
+        )
+
+    def test_sync_status_endpoint_returns_state_timestamps(self):
+        started_at = timezone.now()
+        account = self.create_account(
+            sync_status=GmailAccount.SyncStatus.RUNNING,
+            sync_trigger=GmailAccount.SyncTrigger.MANUAL,
+            sync_started_at=started_at,
+        )
+
+        response = self.client.get("/api/v1/mail/sync/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["data"]["sync_status"],
+            GmailAccount.SyncStatus.RUNNING,
+        )
+        self.assertEqual(
+            response.data["data"]["sync_trigger"],
+            GmailAccount.SyncTrigger.MANUAL,
+        )
+        self.assertTrue(response.data["data"]["is_syncing"])
+
+    @patch("apps.google_services.tasks.EmailSyncService")
+    def test_worker_updates_success_status_and_schedules_after_completion(
+        self,
+        sync_service_class,
+    ):
+        account = self.create_account(
+            sync_status=GmailAccount.SyncStatus.QUEUED,
+            sync_trigger=GmailAccount.SyncTrigger.MANUAL,
+            last_successful_sync_at=timezone.now() - timedelta(days=1),
+        )
+        sync_service_class.return_value.sync_inbox.return_value = {
+            "synced_count": 2,
+            "new_count": 1,
+            "updated_count": 1,
+            "failed_count": 0,
+            "next_page_token": None,
+        }
+
+        result = sync_gmail_for_account.run(account.pk)
+
+        self.assertEqual(result["sync_status"], GmailAccount.SyncStatus.SUCCEEDED)
+        account.refresh_from_db()
+        self.assertEqual(account.sync_status, GmailAccount.SyncStatus.SUCCEEDED)
+        self.assertIsNotNone(account.sync_started_at)
+        self.assertIsNotNone(account.sync_completed_at)
+        self.assertEqual(
+            account.last_successful_sync_at,
+            account.sync_completed_at,
+        )
+        self.assertEqual(account.last_synced_at, account.sync_completed_at)
+        self.assertGreater(
+            account.next_sync_at,
+            account.sync_completed_at,
+        )
+        self.assertAlmostEqual(
+            (account.next_sync_at - account.sync_completed_at).total_seconds(),
+            300,
+            delta=1,
+        )
+
+    @patch("apps.google_services.tasks.EmailSyncService")
+    def test_worker_skips_duplicate_task_while_sync_is_running(
+        self,
+        sync_service_class,
+    ):
+        account = self.create_account(
+            sync_status=GmailAccount.SyncStatus.RUNNING,
+            sync_trigger=GmailAccount.SyncTrigger.AUTOMATIC,
+            sync_started_at=timezone.now(),
+        )
+
+        result = sync_gmail_for_account.run(account.pk)
+
+        self.assertEqual(result["reason"], "sync_not_queued")
+        sync_service_class.assert_not_called()
+
+    @patch("apps.google_services.tasks.EmailSyncService")
+    def test_worker_records_failure_without_overwriting_last_success(
+        self,
+        sync_service_class,
+    ):
+        last_success = timezone.now() - timedelta(days=1)
+        account = self.create_account(
+            sync_status=GmailAccount.SyncStatus.QUEUED,
+            last_successful_sync_at=last_success,
+            last_synced_at=last_success,
+        )
+        sync_service_class.return_value.sync_inbox.side_effect = RuntimeError(
+            "Gmail API unavailable",
+        )
+
+        with self.assertRaisesMessage(RuntimeError, "Gmail API unavailable"):
+            sync_gmail_for_account.run(account.pk)
+
+        account.refresh_from_db()
+        self.assertEqual(account.sync_status, GmailAccount.SyncStatus.FAILED)
+        self.assertIsNotNone(account.sync_started_at)
+        self.assertIsNotNone(account.sync_completed_at)
+        self.assertEqual(account.last_successful_sync_at, last_success)
+        self.assertEqual(account.last_synced_at, last_success)
+        self.assertGreater(account.next_sync_at, account.sync_completed_at)
 
     def test_email_list_is_authenticated_and_paginated(self):
         self.client.credentials()
@@ -196,7 +377,7 @@ class GmailApiTests(APITestCase):
             HTTP_AUTHORIZATION=f"Bearer {issue_tokens(self.user)['access']}"
         )
         account = self.create_account()
-        self.create_email(account)
+        email = self.create_email(account)
         response = self.client.get("/api/mail/?page=1&limit=10")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -204,6 +385,12 @@ class GmailApiTests(APITestCase):
         self.assertEqual(
             response.data["data"]["results"][0]["gmail_message_id"],
             "gmail-message-1",
+        )
+        self.assertEqual(
+            parse_datetime(
+                response.data["data"]["results"][0]["last_synced_at"],
+            ),
+            email.last_synced_at,
         )
 
     def test_email_list_filters_and_scopes_to_current_user(self):
@@ -239,6 +426,10 @@ class GmailApiTests(APITestCase):
         self.assertEqual(
             response.data["data"]["body_text"],
             "The project is on schedule.",
+        )
+        self.assertEqual(
+            parse_datetime(response.data["data"]["last_synced_at"]),
+            email.last_synced_at,
         )
 
         other_email = self.create_email(

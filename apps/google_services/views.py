@@ -26,7 +26,10 @@ from apps.google_services.services.email_services import (
 )
 from apps.google_services.services.gmail_client import GmailClient
 from apps.google_services.services.oauth_service import GoogleOAuthService
-from apps.google_services.services.sync_service import EmailSyncService
+from apps.google_services.services.sync_scheduler import (
+    enqueue_gmail_sync,
+    get_sync_status_data,
+)
 from core.responses import ResponseInfo
 
 logger = logging.getLogger(__name__)
@@ -255,16 +258,46 @@ class SyncEmailsView(GenericAPIView):
 
     @swagger_auto_schema(
         tags=["Gmail Emails"],
+        operation_summary="Get Gmail synchronization status",
+        operation_description=(
+            "Return the authenticated user's Gmail synchronization status."
+        ),
+        responses={
+            200: "Synchronization status retrieved successfully.",
+            404: "No active Gmail account found.",
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        account = GmailAccount.objects.filter(
+            user=request.user,
+            is_active=True,
+        ).first()
+
+        if not account:
+            return ResponseInfo.not_found(
+                message="No active Gmail account found.",
+                error_code="GMAIL_ACCOUNT_NOT_FOUND",
+            )
+
+        return ResponseInfo.ok(
+            data=get_sync_status_data(account),
+            message="Gmail synchronization status retrieved successfully.",
+        )
+
+    @swagger_auto_schema(
+        tags=["Gmail Emails"],
         operation_summary="Synchronize Gmail emails",
         operation_description=(
-            "Synchronize inbox messages from the connected Gmail account."
+            "Queue an immediate Gmail synchronization for the connected "
+            "account. The request returns while the sync runs in the "
+            "background."
         ),
         request_body=EmailSyncSerializer,
         responses={
-            200: "Email synchronization completed successfully.",
+            202: "Email synchronization queued successfully.",
+            409: "A synchronization is already queued or running.",
             400: "Invalid synchronization parameters.",
             404: "No active Gmail account found.",
-            500: "Email synchronization failed.",
         },
     )
     def post(self, request, *args, **kwargs):
@@ -288,28 +321,39 @@ class SyncEmailsView(GenericAPIView):
             )
 
         try:
-            sync_service = EmailSyncService(account)
-
-            result = sync_service.sync_inbox(
+            account, outcome = enqueue_gmail_sync(
+                account.pk,
+                trigger=GmailAccount.SyncTrigger.MANUAL,
                 max_results=serializer.validated_data["max_results"],
                 page_token=serializer.validated_data.get("page_token"),
             )
-
-            return ResponseInfo.ok(
-                data=result,
-                message="Email synchronization completed successfully.",
-            )
-
         except Exception:
             logger.exception(
-                "Email synchronization failed for user_id=%s",
-                request.user.pk,
+                "Unable to queue manual Gmail sync for account_id=%s",
+                account.pk,
+            )
+            return ResponseInfo.server_error(
+                message="Unable to queue Gmail synchronization.",
+                error_code="EMAIL_SYNC_QUEUE_FAILED",
             )
 
-            return ResponseInfo.server_error(
-                message="Unable to synchronize Gmail messages.",
-                error_code="EMAIL_SYNC_FAILED",
+        if outcome == "already_in_progress":
+            return ResponseInfo.conflict(
+                errors=get_sync_status_data(account),
+                message="Gmail synchronization is already queued or running.",
+                error_code="EMAIL_SYNC_ALREADY_IN_PROGRESS",
             )
+
+        if outcome != "queued":
+            return ResponseInfo.not_found(
+                message="No active Gmail account found.",
+                error_code="GMAIL_ACCOUNT_NOT_FOUND",
+            )
+
+        return ResponseInfo.accepted(
+            data=get_sync_status_data(account),
+            message="Gmail synchronization queued successfully.",
+        )
 
 
 class EmailListView(ListAPIView):

@@ -10,13 +10,21 @@ class GmailAccountAdmin(admin.ModelAdmin):
         "user",
         "email_address",
         "is_active",
+        "sync_status",
+        "sync_trigger",
         "token_expiry",
         "last_synced_at",
+        "sync_started_at",
+        "sync_completed_at",
+        "last_successful_sync_at",
+        "next_sync_at",
         "created_at",
     )
 
     list_filter = (
         "is_active",
+        "sync_status",
+        "sync_trigger",
         "created_at",
     )
 
@@ -28,6 +36,13 @@ class GmailAccountAdmin(admin.ModelAdmin):
     readonly_fields = (
         "created_at",
         "updated_at",
+        "last_synced_at",
+        "sync_status",
+        "sync_trigger",
+        "sync_started_at",
+        "sync_completed_at",
+        "last_successful_sync_at",
+        "next_sync_at",
     )
 
     ordering = ("-id",)

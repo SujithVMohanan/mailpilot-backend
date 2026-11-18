@@ -11,7 +11,16 @@ from core.encryption.secret_fields import EncryptedTextField
 
 
 class GmailAccount(models.Model):
-    
+    class SyncStatus(models.TextChoices):
+        IDLE = "IDLE", _("Idle")
+        QUEUED = "QUEUED", _("Queued")
+        RUNNING = "RUNNING", _("Running")
+        SUCCEEDED = "SUCCEEDED", _("Succeeded")
+        FAILED = "FAILED", _("Failed")
+
+    class SyncTrigger(models.TextChoices):
+        AUTOMATIC = "AUTOMATIC", _("Automatic")
+        MANUAL = "MANUAL", _("Manual")
 
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -47,6 +56,24 @@ class GmailAccount(models.Model):
         null=True,
     )
 
+    sync_status = models.CharField(
+        _("Sync Status"),
+        max_length=10,
+        choices=SyncStatus.choices,
+        default=SyncStatus.IDLE,
+        db_index=True,
+    )
+    sync_trigger = models.CharField(
+        _("Sync Trigger"),
+        max_length=10,
+        choices=SyncTrigger.choices,
+        blank=True,
+    )
+    sync_started_at = models.DateTimeField(blank=True, null=True)
+    sync_completed_at = models.DateTimeField(blank=True, null=True)
+    last_successful_sync_at = models.DateTimeField(blank=True, null=True)
+    next_sync_at = models.DateTimeField(blank=True, null=True, db_index=True)
+
     is_active = models.BooleanField(_("Is Active"),
         default=True,
         db_index=True,
@@ -62,6 +89,10 @@ class GmailAccount(models.Model):
             models.Index(
                 fields=["is_active", "token_expiry"],
                 name="gmail_active_expiry_idx",
+            ),
+            models.Index(
+                fields=["is_active", "sync_status", "next_sync_at"],
+                name="gmail_sync_due_idx",
             ),
         ]
 
@@ -83,6 +114,25 @@ class GmailAccount(models.Model):
         return timezone.now() >= (
             self.token_expiry - timedelta(minutes=5)
         )
+
+
+class GmailSyncSchedule(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="gmail_sync_schedule",
+    )
+    enabled = models.BooleanField(default=False, db_index=True)
+    interval_minutes = models.PositiveSmallIntegerField(default=5)
+    next_run_at = models.DateTimeField(blank=True, null=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "google_gmail_sync_schedules"
+
+    def __str__(self):
+        return f"Gmail sync schedule for user {self.user_id}"
 
 
 
@@ -141,6 +191,12 @@ class Email(models.Model):
     received_datetime = models.DateTimeField(
         _("Received Date"),
         db_index=True,
+    )
+
+    last_synced_at = models.DateTimeField(
+        _("Last Synced At"),
+        blank=True,
+        null=True,
     )
 
     is_read = models.BooleanField(

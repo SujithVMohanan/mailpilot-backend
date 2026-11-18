@@ -207,6 +207,19 @@ CACHES = {
 
 SWAGGER_USE_COMPAT_RENDERERS = False
 
+CELERY_BROKER_URL = env(
+    "CELERY_BROKER_URL",
+    default="redis://localhost:6379/0",
+)
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_ENABLE_UTC = USE_TZ
+CELERY_BEAT_SCHEDULE = {
+    "enqueue-due-gmail-syncs": {
+        "task": "apps.google_services.tasks.enqueue_due_gmail_syncs",
+        "schedule": 10.0,
+    },
+}
+
 SWAGGER_SETTINGS = {
     "DEFAULT_API_URL": env(
         "SWAGGER_DEFAULT_API_URL",

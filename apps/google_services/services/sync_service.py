@@ -176,7 +176,10 @@ class EmailSyncService:
             _, created = Email.objects.update_or_create(
                 account=self.account,
                 gmail_message_id=gmail_message_id,
-                defaults=email_data,
+                defaults={
+                    **email_data,
+                    "last_synced_at": timezone.now(),
+                },
             )
 
         return created
@@ -228,15 +231,6 @@ class EmailSyncService:
                     self.account.pk,
                     message_id,
                 )
-
-        self.account.last_synced_at = timezone.now()
-
-        self.account.save(
-            update_fields=[
-                "last_synced_at",
-                "updated_at",
-            ],
-        )
 
         return {
             "synced_count": new_count + updated_count,
