@@ -51,6 +51,7 @@ class RuleExecutionOrchestrator:
         self,
         rule: EmailRule,
         emails_queryset=None,
+        execution: RuleExecution | None = None,
     ) -> RuleExecution:
         self._validate_account()
         self._validate_rule(rule)
@@ -64,7 +65,8 @@ class RuleExecutionOrchestrator:
             ).values_list("email_id", flat=True)
         )
 
-        execution = self._create_execution(rule)
+        if execution is None:
+            execution = self._create_execution(rule)
 
         succeeded = 0
         failed = 0

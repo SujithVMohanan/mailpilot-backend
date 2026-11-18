@@ -10,7 +10,12 @@ from apps.rule.serializers import (
     EmailRuleSerializer,
     RuleExecutionSerializer,
 )
-from apps.rule.services.executor import RuleExecutionOrchestrator
+from apps.rule.services.execution_queue import (
+    RuleExecutionInProgress,
+    RuleExecutionQueueError,
+    queue_all_active_rule_executions,
+    queue_rule_execution,
+)
 from core.docs import swagger_auto_schema
 from core.responses import ResponseInfo
 
@@ -106,15 +111,30 @@ class EmailRuleViewSet(viewsets.ModelViewSet):
         rule = self.get_object()
 
         try:
-            execution = RuleExecutionOrchestrator(
+            execution = queue_rule_execution(
                 user=request.user,
-            ).execute_rule(rule)
+                rule_id=rule.pk,
+            )
 
-            data = RuleExecutionSerializer(execution).data
+            if execution is None:
+                return ResponseInfo.not_found(
+                    message="Rule not found.",
+                    error_code="RULE_NOT_FOUND",
+                )
 
-            return ResponseInfo.ok(
-                data=data,
-                message="Rule execution completed.",
+            return ResponseInfo.accepted(
+                data=RuleExecutionSerializer(execution).data,
+                message="Rule execution queued successfully.",
+            )
+
+        except RuleExecutionInProgress as exc:
+            return ResponseInfo.conflict(
+                errors=RuleExecutionSerializer(
+                    exc.executions,
+                    many=True,
+                ).data,
+                message="This rule already has an execution queued or running.",
+                error_code="RULE_EXECUTION_ALREADY_IN_PROGRESS",
             )
 
         except RuntimeError as exc:
@@ -129,33 +149,58 @@ class EmailRuleViewSet(viewsets.ModelViewSet):
                 message=str(exc),
             )
 
+        except RuleExecutionQueueError:
+            logger.exception(
+                "Unable to queue rule execution. user=%s rule=%s",
+                request.user.pk,
+                rule.pk,
+            )
+            return ResponseInfo.server_error(
+                message="Unable to queue rule execution.",
+                error_code="RULE_EXECUTION_QUEUE_FAILED",
+            )
+
         except Exception:
             logger.exception(
-                "Rule execution error. user=%s rule=%s",
+                "Unable to queue rule execution. user=%s rule=%s",
                 request.user.pk,
                 rule.pk,
             )
 
             return ResponseInfo.server_error(
-                message="An error occurred while executing the rule.",
+                message="Unable to queue rule execution.",
+                error_code="RULE_EXECUTION_QUEUE_FAILED",
             )
 
     @swagger_auto_schema(tags=["Rules"])
     @action(detail=False, methods=["post"], url_path="execute-all")
     def execute_all(self, request):
         try:
-            executions = RuleExecutionOrchestrator(
+            executions = queue_all_active_rule_executions(
                 user=request.user,
-            ).execute_all_active_rules()
+            )
 
             data = RuleExecutionSerializer(
                 executions,
                 many=True,
             ).data
 
-            return ResponseInfo.ok(
+            return ResponseInfo.accepted(
                 data=data,
-                message="Rule executions completed.",
+                message="Rule executions queued successfully.",
+            )
+
+        except RuleExecutionInProgress as exc:
+            return ResponseInfo.conflict(
+                errors=RuleExecutionSerializer(
+                    exc.executions,
+                    many=True,
+                ).data,
+                message=(
+                    "One or more active rules already have executions "
+                    "queued or running."
+                ),
+                error_code="RULE_EXECUTION_ALREADY_IN_PROGRESS",
             )
 
         except RuntimeError as exc:
@@ -169,14 +214,25 @@ class EmailRuleViewSet(viewsets.ModelViewSet):
                 message=str(exc),
             )
 
+        except RuleExecutionQueueError:
+            logger.exception(
+                "Unable to queue bulk rule executions. user=%s",
+                request.user.pk,
+            )
+            return ResponseInfo.server_error(
+                message="Unable to queue rule executions.",
+                error_code="RULE_EXECUTION_QUEUE_FAILED",
+            )
+
         except Exception:
             logger.exception(
-                "Bulk rule execution error. user=%s",
+                "Unable to queue bulk rule executions. user=%s",
                 request.user.pk,
             )
 
             return ResponseInfo.server_error(
-                message="An error occurred while executing rules.",
+                message="Unable to queue rule executions.",
+                error_code="RULE_EXECUTION_QUEUE_FAILED",
             )
 
 

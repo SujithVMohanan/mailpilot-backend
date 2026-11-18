@@ -221,8 +221,8 @@ npm run dev
 - `PUT /api/rules/<id>/` — Update rule, conditions, and actions
 - `DELETE /api/rules/<id>/` — Delete rule
 - `POST /api/rules/<id>/toggle/` — Toggle active status
-- `POST /api/rules/<id>/execute/` — Run rule against stored emails
-- `POST /api/rules/execute-all/` — Execute all active rules
+- `POST /api/rules/<id>/execute/` — Queue a rule run in Celery (`202`; execution history initially reports `PENDING`)
+- `POST /api/rules/execute-all/` — Queue all active rules as one Celery task (`202`)
 - `GET /api/rules/executions/` — Audit history with per-email logs (`rule`, `page`, `limit`)
 
 ---
