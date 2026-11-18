@@ -1,11 +1,10 @@
-
 import logging
+import time
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from apps.google_services.models import GmailAccount
-from apps.google_services.services.oauth_service import GoogleOAuthService
 from apps.google_services.services.oauth_service import GoogleOAuthService
 
 
@@ -13,10 +12,12 @@ logger = logging.getLogger(__name__)
 
 
 class GmailClient:
-    
-    SERVICE_NAME    = "gmail"
+
+    SERVICE_NAME = "gmail"
     SERVICE_VERSION = "v1"
-    USER_ID         = "me"
+    USER_ID = "me"
+    RETRY_ATTEMPTS = 3
+    RETRY_STATUSES = {429, 500, 502, 503, 504}
 
     def __init__(self, account: GmailAccount):
         self.account = account
@@ -32,13 +33,36 @@ class GmailClient:
             cache_discovery=False,
         )
 
+    def _execute(self, request):
+        delay = 1
+
+        for attempt in range(1, self.RETRY_ATTEMPTS + 1):
+            try:
+                return request.execute()
+            except HttpError as exc:
+                status_code = int(getattr(exc.resp, "status", 0) or 0)
+                retryable = status_code in self.RETRY_STATUSES
+
+                if retryable and attempt < self.RETRY_ATTEMPTS:
+                    logger.warning(
+                        "Retrying Gmail API call. account_id=%s status=%s attempt=%s",
+                        self.account.pk,
+                        status_code,
+                        attempt,
+                    )
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+
+                raise
+
     def list_inbox_messages(
         self,
         max_results=50,
         page_token=None,
     ):
         try:
-            response = (
+            response = self._execute(
                 self.service.users()
                 .messages()
                 .list(
@@ -47,7 +71,6 @@ class GmailClient:
                     maxResults=max_results,
                     pageToken=page_token,
                 )
-                .execute()
             )
 
             return (
@@ -64,7 +87,7 @@ class GmailClient:
 
     def get_message_detail(self, message_id):
         try:
-            return (
+            return self._execute(
                 self.service.users()
                 .messages()
                 .get(
@@ -72,7 +95,6 @@ class GmailClient:
                     id=message_id,
                     format="full",
                 )
-                .execute()
             )
 
         except HttpError:
@@ -84,11 +106,10 @@ class GmailClient:
 
     def list_labels(self):
         try:
-            response = (
+            response = self._execute(
                 self.service.users()
                 .labels()
                 .list(userId=self.USER_ID)
-                .execute()
             )
 
             return response.get("labels", [])
@@ -112,7 +133,7 @@ class GmailClient:
         }
 
         try:
-            return (
+            return self._execute(
                 self.service.users()
                 .messages()
                 .modify(
@@ -120,7 +141,6 @@ class GmailClient:
                     id=message_id,
                     body=payload,
                 )
-                .execute()
             )
 
         except HttpError:

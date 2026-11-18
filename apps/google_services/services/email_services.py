@@ -5,6 +5,7 @@ from apps.google_services.models import (
     Email,
     GmailAccount
 )
+from apps.rule.models import EmailRule, RuleExecution
 
 
 class EmailQueryService:
@@ -98,14 +99,26 @@ class DashboardService:
             read_emails = stats["read"]
             unread_emails = stats["unread"]
 
-        rules = getattr(user, "email_rules", None)
+        rule_stats = EmailRule.objects.filter(user=user).aggregate(
+            total=Count("id"),
+            active=Count("id", filter=Q(is_active=True)),
+        )
 
-        total_rules = rules.count() if rules is not None else 0
-
-        active_rules = (
-            rules.filter(is_active=True).count()
-            if rules is not None
-            else 0
+        recent_executions = list(
+            RuleExecution.objects.filter(user=user)
+            .order_by("-started_at")
+            .values(
+                "id",
+                "rule_id",
+                "rule_name_snapshot",
+                "status",
+                "total_evaluated",
+                "total_matched",
+                "actions_succeeded",
+                "actions_failed",
+                "started_at",
+                "completed_at",
+            )[:10]
         )
 
         return {
@@ -121,7 +134,7 @@ class DashboardService:
             "total_emails": total_emails,
             "read_emails": read_emails,
             "unread_emails": unread_emails,
-            "total_rules": total_rules,
-            "active_rules": active_rules,
-            "recent_executions": [],
+            "total_rules": rule_stats["total"],
+            "active_rules": rule_stats["active"],
+            "recent_executions": recent_executions,
         }

@@ -5,7 +5,7 @@ from typing import Any
 
 from django.db.models import QuerySet
 from rest_framework import generics
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -160,7 +160,7 @@ class CurrentUserApiView(generics.GenericAPIView[User]):
 
 class GetUsersApiView(generics.ListAPIView[User]):
 
-    permission_classes     = [IsAuthenticated]
+    permission_classes     = [IsAdminUser]
     serializer_class       = GetUsersApiSchema
     query_serializer_class = GetUsersQuerySerializer
 
@@ -183,7 +183,7 @@ class GetUsersApiView(generics.ListAPIView[User]):
 
 class DeleteUsersApiView(generics.GenericAPIView[User]):
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminUser]
     serializer_class   = DeleteUsersSerializer
 
     @swagger_auto_schema(

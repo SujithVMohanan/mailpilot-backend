@@ -1,24 +1,32 @@
-
+import logging
+import secrets
 from datetime import timezone as datetime_timezone
 
 import requests
 
 from django.conf import settings
+from django.core.cache import cache
 from django.utils import timezone
 
-from google_auth_oauthlib.flow import Flow
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow
 
 from apps.google_services.models import GmailAccount
 
 
+logger = logging.getLogger(__name__)
+
+
 class GoogleOAuthService:
 
-    TOKEN_URI       = "https://oauth2.googleapis.com/token"
-    USER_INFO_URL   = "https://www.googleapis.com/oauth2/v2/userinfo"
+    TOKEN_URI = "https://oauth2.googleapis.com/token"
+    REVOKE_URI = "https://oauth2.googleapis.com/revoke"
+    USER_INFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
     REQUEST_TIMEOUT = 10
+    OAUTH_STATE_TTL = 600
+    OAUTH_STATE_KEY = "gmail_oauth_state:{user_id}"
 
     @staticmethod
     def _get_client_config():
@@ -40,6 +48,25 @@ class GoogleOAuthService:
             redirect_uri=settings.GOOGLE_REDIRECT_URI,
             state=state,
         )
+
+    @classmethod
+    def store_oauth_state(cls, user_id, state):
+        cache.set(
+            cls.OAUTH_STATE_KEY.format(user_id=user_id),
+            state,
+            timeout=cls.OAUTH_STATE_TTL,
+        )
+
+    @classmethod
+    def validate_oauth_state(cls, user_id, state):
+        key = cls.OAUTH_STATE_KEY.format(user_id=user_id)
+        stored_state = cache.get(key)
+        cache.delete(key)
+
+        if not stored_state or not state:
+            return False
+
+        return secrets.compare_digest(str(stored_state), str(state))
 
     @classmethod
     def get_authorization_url(cls, state=None):
@@ -158,3 +185,26 @@ class GoogleOAuthService:
             )
 
         return credentials
+
+    @classmethod
+    def revoke_account_tokens(cls, account):
+        token = account.refresh_token or account.access_token
+
+        if not token:
+            return
+
+        try:
+            requests.post(
+                cls.REVOKE_URI,
+                params={"token": token},
+                headers={
+                    "content-type": "application/x-www-form-urlencoded",
+                },
+                timeout=cls.REQUEST_TIMEOUT,
+            )
+        except requests.RequestException:
+            logger.warning(
+                "Failed to revoke Google tokens for account_id=%s",
+                account.pk,
+                exc_info=True,
+            )

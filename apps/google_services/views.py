@@ -26,6 +26,7 @@ from apps.google_services.services.email_services import (
 )
 from apps.google_services.services.gmail_client import GmailClient
 from apps.google_services.services.oauth_service import GoogleOAuthService
+from apps.google_services.services.sync_service import EmailSyncService
 from core.responses import ResponseInfo
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ class OAuthInitiateView(GenericAPIView):
     )
     def get(self, request, *args, **kwargs):
         state = secrets.token_urlsafe(32)
-        request.session["google_oauth_state"] = state
+        GoogleOAuthService.store_oauth_state(request.user.pk, state)
 
         try:
             auth_url, _ = GoogleOAuthService.get_authorization_url(
@@ -123,13 +124,8 @@ class OAuthCallbackView(GenericAPIView):
                 message="Authorization code and state are required.",
             )
 
-        stored_state = request.session.pop(
-            "google_oauth_state",
-            None,
-        )
-
-        if not stored_state or not secrets.compare_digest(
-            stored_state,
+        if not GoogleOAuthService.validate_oauth_state(
+            request.user.pk,
             state,
         ):
             return ResponseInfo.bad_request(
@@ -189,6 +185,7 @@ class DisconnectGmailView(GenericAPIView):
                 error_code="GMAIL_ACCOUNT_NOT_FOUND",
             )
 
+        GoogleOAuthService.revoke_account_tokens(account)
         account.delete()
 
         return ResponseInfo.ok(

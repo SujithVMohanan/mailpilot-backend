@@ -322,3 +322,49 @@ class RuleEngineTests(TestCase):
                 now_dt=self.now,
             )
         )
+
+    def test_empty_subject_does_not_match_contains(self):
+        email = Mock(
+            sender="client@example.com",
+            recipient="admin@example.com",
+            subject="",
+            body_text="",
+            snippet="",
+            received_datetime=self.now,
+        )
+        condition = Mock(
+            field=RuleCondition.FieldType.SUBJECT,
+            predicate=RuleCondition.PredicateType.CONTAINS,
+            value="project",
+        )
+
+        self.assertFalse(
+            RuleEvaluationEngine.evaluate_condition(
+                condition,
+                email,
+                now_dt=self.now,
+            )
+        )
+
+    def test_empty_sender_equals_empty_value(self):
+        email = Mock(
+            sender="",
+            recipient="admin@example.com",
+            subject="Hello",
+            body_text="",
+            snippet="",
+            received_datetime=self.now,
+        )
+        condition = Mock(
+            field=RuleCondition.FieldType.FROM,
+            predicate=RuleCondition.PredicateType.EQUALS,
+            value="",
+        )
+
+        self.assertTrue(
+            RuleEvaluationEngine.evaluate_condition(
+                condition,
+                email,
+                now_dt=self.now,
+            )
+        )

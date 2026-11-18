@@ -1,8 +1,12 @@
 
+from datetime import timedelta
+
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+
+from core.encryption.secret_fields import EncryptedTextField
 
 
 
@@ -20,8 +24,8 @@ class GmailAccount(models.Model):
         db_index=True,
     )
 
-    access_token = models.TextField(_("Access Token"),blank=True, null=True)
-    refresh_token = models.TextField(
+    access_token = EncryptedTextField(_("Access Token"), blank=True, null=True)
+    refresh_token = EncryptedTextField(
         _("Refresh Token"),
         blank=True,
         null=True,
@@ -77,7 +81,7 @@ class GmailAccount(models.Model):
             return True
 
         return timezone.now() >= (
-            self.token_expiry - timezone.timedelta(minutes=5)
+            self.token_expiry - timedelta(minutes=5)
         )
 
 
