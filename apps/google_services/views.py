@@ -6,7 +6,8 @@ from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
 
-from apps.google_services.serializer import GmailAccountSerializer
+from apps.google_services.serializer import EmailSyncSerializer, GmailAccountSerializer
+from apps.google_services.services.gmail_client import GmailClient
 from apps.google_services.services.oauth_service import GoogleOAuthService
 from core.responses import ResponseInfo
 
@@ -90,6 +91,7 @@ class OAuthCallbackView(GenericAPIView):
                 message="Google authentication failed. Please try again.",
                 error_code="GOOGLE_OAUTH_CALLBACK_FAILED",
             )
+        
 
 
 class DisconnectGmailView(GenericAPIView):
@@ -111,3 +113,99 @@ class DisconnectGmailView(GenericAPIView):
         return ResponseInfo.ok(
             message="Gmail account disconnected successfully.",
         )
+
+
+
+
+
+
+
+
+
+
+class GmailLabelsView(GenericAPIView):
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        account = GmailAccount.objects.filter(
+            user=request.user,
+            is_active=True,
+        ).first()
+
+        if not account:
+            return ResponseInfo.not_found(
+                message="No active Gmail account found.",
+                error_code="GMAIL_ACCOUNT_NOT_FOUND",
+            )
+
+        try:
+            labels = GmailClient(account).list_labels()
+
+            return ResponseInfo.ok(
+                data={"labels": labels},
+                message="Gmail labels retrieved successfully.",
+            )
+
+        except Exception:
+            logger.exception(
+                "Gmail label retrieval failed for user_id=%s",
+                request.user.pk,
+            )
+
+            return ResponseInfo.server_error(
+                message="Unable to retrieve Gmail labels.",
+                error_code="GMAIL_LABELS_FAILED",
+            )
+
+
+class SyncEmailsView(GenericAPIView):
+    
+    serializer_class  = EmailSyncSerializer
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(
+            data=request.data,
+        )
+
+        if not serializer.is_valid():
+            return ResponseInfo.validation_error(
+                errors=serializer.errors,
+                message="Invalid email synchronization parameters.",
+            )
+
+        account = GmailAccount.objects.filter(
+            user=request.user,
+            is_active=True,
+        ).first()
+
+        if not account:
+            return ResponseInfo.not_found(
+                message="No active Gmail account found.",
+                error_code="GMAIL_ACCOUNT_NOT_FOUND",
+            )
+
+        try:
+            sync_service = EmailSyncService(account)
+
+            result = sync_service.sync_inbox(
+                max_results=serializer.validated_data["max_results"],
+                page_token=serializer.validated_data.get("page_token"),
+            )
+
+            return ResponseInfo.ok(
+                data=result,
+                message="Email synchronization completed successfully.",
+            )
+
+        except Exception:
+            logger.exception(
+                "Email synchronization failed for user_id=%s",
+                request.user.pk,
+            )
+
+            return ResponseInfo.server_error(
+                message="Unable to synchronize Gmail messages.",
+                error_code="EMAIL_SYNC_FAILED",
+            )
