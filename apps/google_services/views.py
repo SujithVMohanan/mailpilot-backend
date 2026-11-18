@@ -387,7 +387,7 @@ class EmailListView(ListAPIView):
             ).data
 
             return ResponseInfo.ok(
-                data=paginated_data,
+                data=paginated_data["data"],
                 message="Emails retrieved successfully.",
             )
 
