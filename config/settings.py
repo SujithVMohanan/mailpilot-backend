@@ -42,7 +42,7 @@ DJANGO_APPS = [
 LOCAL_APPS = [
     "apps.users",
     "apps.google_services",
-    
+    "apps.rule",
 ]
 
 THIRD_PARTY_APPS = [
