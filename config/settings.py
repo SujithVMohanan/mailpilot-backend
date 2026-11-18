@@ -242,6 +242,7 @@ GOOGLE_REDIRECT_URI = env(
 )
 
 GOOGLE_GMAIL_SCOPES = [
+    "openid",
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/userinfo.email",
 ]

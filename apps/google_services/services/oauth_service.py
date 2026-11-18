@@ -1,6 +1,12 @@
 import logging
+import os
 import secrets
 from datetime import timezone as datetime_timezone
+
+# Allow HTTP redirect URIs during local development
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+# Allow Google to return extra scopes like 'openid' without raising ScopeChanged
+os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 import requests
 
@@ -50,23 +56,37 @@ class GoogleOAuthService:
         )
 
     @classmethod
-    def store_oauth_state(cls, user_id, state):
+    def store_oauth_state(cls, user_id, state, code_verifier=None):
+        payload = {
+            "state": state,
+            "code_verifier": code_verifier,
+        }
         cache.set(
             cls.OAUTH_STATE_KEY.format(user_id=user_id),
-            state,
+            payload,
             timeout=cls.OAUTH_STATE_TTL,
         )
 
     @classmethod
     def validate_oauth_state(cls, user_id, state):
         key = cls.OAUTH_STATE_KEY.format(user_id=user_id)
-        stored_state = cache.get(key)
+        stored_data = cache.get(key)
         cache.delete(key)
 
-        if not stored_state or not state:
-            return False
+        if not stored_data or not state:
+            return None
 
-        return secrets.compare_digest(str(stored_state), str(state))
+        if isinstance(stored_data, dict):
+            stored_state = stored_data.get("state")
+            code_verifier = stored_data.get("code_verifier")
+        else:
+            stored_state = stored_data
+            code_verifier = None
+
+        if not stored_state or not secrets.compare_digest(str(stored_state), str(state)):
+            return None
+
+        return code_verifier or True
 
     @classmethod
     def get_authorization_url(cls, state=None):
@@ -78,7 +98,7 @@ class GoogleOAuthService:
             prompt="consent",
         )
 
-        return auth_url, returned_state
+        return auth_url, returned_state, flow.code_verifier
 
     @classmethod
     def _get_user_email(cls, access_token):
@@ -110,8 +130,10 @@ class GoogleOAuthService:
         return expiry
 
     @classmethod
-    def exchange_code_for_tokens(cls, code, user, state):
+    def exchange_code_for_tokens(cls, code, user, state, code_verifier=None):
         flow = cls._get_flow(state=state)
+        if code_verifier and code_verifier is not True:
+            flow.code_verifier = code_verifier
         flow.fetch_token(code=code)
 
         credentials = flow.credentials

@@ -50,11 +50,15 @@ class OAuthInitiateView(GenericAPIView):
     )
     def get(self, request, *args, **kwargs):
         state = secrets.token_urlsafe(32)
-        GoogleOAuthService.store_oauth_state(request.user.pk, state)
 
         try:
-            auth_url, _ = GoogleOAuthService.get_authorization_url(
+            auth_url, _, code_verifier = GoogleOAuthService.get_authorization_url(
                 state=state,
+            )
+            GoogleOAuthService.store_oauth_state(
+                request.user.pk,
+                state,
+                code_verifier,
             )
 
             return ResponseInfo.ok(
@@ -124,10 +128,12 @@ class OAuthCallbackView(GenericAPIView):
                 message="Authorization code and state are required.",
             )
 
-        if not GoogleOAuthService.validate_oauth_state(
+        code_verifier = GoogleOAuthService.validate_oauth_state(
             request.user.pk,
             state,
-        ):
+        )
+
+        if not code_verifier:
             return ResponseInfo.bad_request(
                 message="Invalid or expired OAuth state.",
                 error_code="INVALID_OAUTH_STATE",
@@ -138,6 +144,7 @@ class OAuthCallbackView(GenericAPIView):
                 code=code,
                 user=request.user,
                 state=state,
+                code_verifier=code_verifier,
             )
 
             serializer = self.get_serializer(account)
@@ -147,14 +154,15 @@ class OAuthCallbackView(GenericAPIView):
                 message="Gmail account connected successfully.",
             )
 
-        except Exception:
+        except Exception as exc:
             logger.exception(
-                "Google OAuth callback failed for user_id=%s",
+                "Google OAuth callback failed for user_id=%s: %s",
                 request.user.pk,
+                exc,
             )
 
             return ResponseInfo.bad_request(
-                message="Google authentication failed. Please try again.",
+                message=f"Google authentication failed: {str(exc)}",
                 error_code="GOOGLE_OAUTH_CALLBACK_FAILED",
             )
 
