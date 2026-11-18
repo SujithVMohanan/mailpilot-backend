@@ -35,6 +35,7 @@ urlpatterns = [
             [
                
                 path("users/", include("apps.users.urls")),
+                path("mail/", include("apps.google_services.urls")),
 
 
 
