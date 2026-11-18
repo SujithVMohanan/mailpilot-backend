@@ -4,6 +4,7 @@ import secrets
 
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
+from rest_framework.views import APIView
 from rest_framework.generics import (
     GenericAPIView,
     ListAPIView,
@@ -11,7 +12,7 @@ from rest_framework.generics import (
 )
 from rest_framework.permissions import IsAuthenticated
 
-from apps.google_services.models import GmailAccount
+from apps.google_services.models import Email, GmailAccount
 from apps.google_services.schemas import (
     EmailDetailSchema,
     EmailListSchema,
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 
-class OAuthInitiateView(GenericAPIView):
+class OAuthInitiateView(APIView):
     permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
@@ -171,7 +172,7 @@ class OAuthCallbackView(GenericAPIView):
 
 
 
-class DisconnectGmailView(GenericAPIView):
+class DisconnectGmailView(APIView):
     permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
@@ -204,7 +205,7 @@ class DisconnectGmailView(GenericAPIView):
         )
 
 
-class GmailLabelsView(GenericAPIView):
+class GmailLabelsView(APIView):
     permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
@@ -414,6 +415,9 @@ class EmailListView(ListAPIView):
         return super().get(request, *args, **kwargs)
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return Email.objects.none()
+
         return EmailQueryService.get_emails(
             user=self.request.user,
             params=self.request.query_params,
@@ -463,6 +467,9 @@ class EmailDetailView(RetrieveAPIView):
         return super().get(request, *args, **kwargs)
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return Email.objects.none()
+
         return EmailQueryService.get_emails(
             user=self.request.user,
             params={},

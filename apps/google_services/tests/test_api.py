@@ -69,6 +69,14 @@ class GmailApiTests(APITestCase):
         response = self.client.get("/api/mail/oauth/initiate/")
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    def test_swagger_schema_is_available_without_authentication(self):
+        self.client.credentials()
+
+        with self.assertNoLogs("drf_yasg.inspectors.base", level="ERROR"):
+            response = self.client.get("/api/docs/json/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
     @patch("apps.google_services.views.GoogleOAuthService.store_oauth_state")
     @patch("apps.google_services.views.GoogleOAuthService.get_authorization_url")
     def test_oauth_initiate_returns_authorization_url(self, get_url, store_state):

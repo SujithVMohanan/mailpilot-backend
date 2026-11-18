@@ -26,11 +26,30 @@ Copy-Item .env.example .env
 notepad .env
 ```
 
-Set a secure `SECRET_KEY`, database credentials, and Google OAuth client ID and secret. For the manual setup, use `DB_HOST=localhost` and `CELERY_BROKER_URL=redis://localhost:6379/0`. Docker Compose sets the database host and Celery broker for its containers.
+Set a secure `SECRET_KEY`, database credentials, and Google OAuth client ID and secret. Keep the OAuth values as placeholders until you configure Google OAuth. For manual startup, use `DB_HOST=localhost` and `CELERY_BROKER_URL=redis://localhost:6379/0`. Docker Compose overrides these container settings with `DB_HOST=db` and `CELERY_BROKER_URL=redis://redis:6379/0`.
 
 ## Run manually
 
-Start PostgreSQL and Redis, then install and start the API:
+### 1. Start PostgreSQL and Redis
+
+These commands create local development containers. Use the same database name, user, and password in `.env` (`DB_NAME`, `DB_USER`, and `DB_PASSWORD`); set `DB_HOST=localhost`, `DB_PORT=5432`, and `CELERY_BROKER_URL=redis://localhost:6379/0`.
+
+```powershell
+docker run --name mailpilot-db `
+  -e POSTGRES_DB=mail-management `
+  -e POSTGRES_USER=postgres `
+  -e POSTGRES_PASSWORD=change-me `
+  -p 5432:5432 `
+  -d postgres:16-alpine
+
+docker run --rm --name mailpilot-redis -p 6379:6379 redis:7-alpine
+```
+
+The Redis command stays in the foreground; leave that terminal open. PostgreSQL runs in the background. If you already created the PostgreSQL container, start it with `docker start mailpilot-db` instead of running the create command again.
+
+### 2. Install dependencies and start Django
+
+In a new PowerShell terminal, from the repository directory:
 
 ```powershell
 python -m venv venv
@@ -40,39 +59,52 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-Keep the API terminal running. In two additional terminals, activate the virtual environment and start Celery:
+Keep Django running. Open two more PowerShell terminals in the repository directory and activate the virtual environment in each.
+
+### 3. Start the Celery worker
+
+The worker processes queued Gmail synchronization and rule execution tasks. On Windows, use the `solo` pool:
 
 ```powershell
 .\venv\Scripts\Activate.ps1
 celery -A config worker --pool=solo --loglevel=info
 ```
 
+### 4. Start Celery Beat
+
+Beat schedules automatic Gmail synchronization checks. Keep this process running alongside the worker:
+
 ```powershell
 .\venv\Scripts\Activate.ps1
 celery -A config beat --loglevel=info
 ```
 
-The `solo` worker pool is suitable for local development on Windows.
-
 ## Run with Docker
 
-After configuring `.env`, build and start the API, PostgreSQL, Redis, Celery worker, and Celery Beat:
+After configuring `.env` with a secure `SECRET_KEY` and database credentials, build and start the API, PostgreSQL, Redis, Celery worker, and Celery Beat:
 
 ```powershell
 docker compose up --build -d
 docker compose ps
 ```
 
-The API container applies database migrations during startup. Create an admin user if needed:
+The API container applies migrations and collects static files at startup. Check logs for all backend services:
+
+```powershell
+docker compose logs -f api celery-worker celery-beat redis db
+```
+
+The API, Celery worker, and Celery Beat use the Compose Redis service as their broker (`redis://redis:6379/0`). Do not use `localhost` for the broker inside a container; it refers to that container, not the Redis service.
+
+Create a Django admin account if needed:
 
 ```powershell
 docker compose exec api python manage.py createsuperuser
 ```
 
-View service logs and stop the stack:
+Stop the stack:
 
 ```powershell
-docker compose logs -f api celery-worker celery-beat
 docker compose down
 ```
 

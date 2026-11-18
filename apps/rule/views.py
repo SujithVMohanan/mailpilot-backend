@@ -28,6 +28,9 @@ class EmailRuleViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return EmailRule.objects.none()
+
         return (
             EmailRule.objects.filter(
                 user=self.request.user,
@@ -242,6 +245,9 @@ class RuleExecutionListView(ListAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        if getattr(self, "swagger_fake_view", False):
+            return RuleExecution.objects.none()
+
         queryset = (
             RuleExecution.objects.filter(
                 user=self.request.user,

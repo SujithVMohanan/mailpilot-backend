@@ -59,6 +59,13 @@ class RuleApiTests(APITestCase):
         response = self.client.get("/api/rules/")
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    def test_swagger_schema_is_available_without_authentication(self):
+        self.client.credentials()
+
+        response = self.client.get("/api/docs/json/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
     def test_create_rule_returns_nested_conditions_and_actions(self):
         response = self.client.post(
             "/api/rules/",
