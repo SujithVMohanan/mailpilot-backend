@@ -2,27 +2,53 @@
 import logging
 import secrets
 
-from rest_framework import status
-from rest_framework.generics import GenericAPIView
+from drf_yasg import openapi
+from drf_yasg.utils import swagger_auto_schema
+from rest_framework.generics import (
+    GenericAPIView,
+    ListAPIView,
+    RetrieveAPIView,
+)
 from rest_framework.permissions import IsAuthenticated
 
-from apps.google_services.serializer import EmailSyncSerializer, GmailAccountSerializer
+from apps.google_services.models import GmailAccount
+from apps.google_services.schemas import (
+    EmailDetailSchema,
+    EmailListSchema,
+)
+from apps.google_services.serializer import (
+    EmailSyncSerializer,
+    GmailAccountSerializer,
+)
+from apps.google_services.services.email_services import (
+    DashboardService,
+    EmailQueryService,
+)
 from apps.google_services.services.gmail_client import GmailClient
 from apps.google_services.services.oauth_service import GoogleOAuthService
 from core.responses import ResponseInfo
 
-from apps.google_services.models import GmailAccount
-
 logger = logging.getLogger(__name__)
 
 
-class OAuthInitiateView(GenericAPIView):
 
+class OAuthInitiateView(GenericAPIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        tags=["Gmail OAuth"],
+        operation_summary="Initiate Google OAuth",
+        operation_description=(
+            "Generate a Google authorization URL to connect "
+            "the authenticated user's Gmail account."
+        ),
+        responses={
+            200: "Authorization URL generated successfully.",
+            500: "Unable to initiate Google authentication.",
+        },
+    )
     def get(self, request, *args, **kwargs):
         state = secrets.token_urlsafe(32)
-
         request.session["google_oauth_state"] = state
 
         try:
@@ -36,7 +62,10 @@ class OAuthInitiateView(GenericAPIView):
             )
 
         except Exception:
-            logger.exception("Google OAuth initiation failed for user_id=%s", request.user.pk)
+            logger.exception(
+                "Google OAuth initiation failed for user_id=%s",
+                request.user.pk,
+            )
 
             return ResponseInfo.server_error(
                 message="Unable to initiate Google authentication.",
@@ -45,10 +74,36 @@ class OAuthInitiateView(GenericAPIView):
 
 
 class OAuthCallbackView(GenericAPIView):
-
     serializer_class = GmailAccountSerializer
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        tags=["Gmail OAuth"],
+        operation_summary="Complete Google OAuth",
+        operation_description=(
+            "Exchange the Google authorization code for tokens "
+            "and connect the Gmail account."
+        ),
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["code", "state"],
+            properties={
+                "code": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    description="Google authorization code.",
+                ),
+                "state": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    description="OAuth state received during initiation.",
+                ),
+            },
+        ),
+        responses={
+            200: "Gmail account connected successfully.",
+            400: "Invalid OAuth state or authentication failure.",
+            500: "Unexpected server error.",
+        },
+    )
     def post(self, request, *args, **kwargs):
         code = request.data.get("code")
         state = request.data.get("state")
@@ -56,15 +111,27 @@ class OAuthCallbackView(GenericAPIView):
         if not code or not state:
             return ResponseInfo.validation_error(
                 errors={
-                    "code": ["Authorization code is required."] if not code else [],
-                    "state": ["OAuth state is required."] if not state else [],
+                    "code": (
+                        ["Authorization code is required."]
+                        if not code else []
+                    ),
+                    "state": (
+                        ["OAuth state is required."]
+                        if not state else []
+                    ),
                 },
                 message="Authorization code and state are required.",
             )
 
-        stored_state = request.session.pop("google_oauth_state", None)
+        stored_state = request.session.pop(
+            "google_oauth_state",
+            None,
+        )
 
-        if not stored_state or not secrets.compare_digest(stored_state, state):
+        if not stored_state or not secrets.compare_digest(
+            stored_state,
+            state,
+        ):
             return ResponseInfo.bad_request(
                 message="Invalid or expired OAuth state.",
                 error_code="INVALID_OAUTH_STATE",
@@ -85,18 +152,32 @@ class OAuthCallbackView(GenericAPIView):
             )
 
         except Exception:
-            logger.exception("Google OAuth callback failed for user_id=%s", request.user.pk)
+            logger.exception(
+                "Google OAuth callback failed for user_id=%s",
+                request.user.pk,
+            )
 
             return ResponseInfo.bad_request(
                 message="Google authentication failed. Please try again.",
                 error_code="GOOGLE_OAUTH_CALLBACK_FAILED",
             )
-        
+
 
 
 class DisconnectGmailView(GenericAPIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        tags=["Gmail Account"],
+        operation_summary="Disconnect Gmail account",
+        operation_description=(
+            "Disconnect the Gmail account belonging to the authenticated user."
+        ),
+        responses={
+            200: "Gmail account disconnected successfully.",
+            404: "No connected Gmail account found.",
+        },
+    )
     def post(self, request, *args, **kwargs):
         account = GmailAccount.objects.filter(
             user=request.user,
@@ -115,18 +196,21 @@ class DisconnectGmailView(GenericAPIView):
         )
 
 
-
-
-
-
-
-
-
-
 class GmailLabelsView(GenericAPIView):
-
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        tags=["Gmail"],
+        operation_summary="List Gmail labels",
+        operation_description=(
+            "Retrieve Gmail labels for the authenticated user's active account."
+        ),
+        responses={
+            200: "Gmail labels retrieved successfully.",
+            404: "No active Gmail account found.",
+            500: "Unable to retrieve Gmail labels.",
+        },
+    )
     def get(self, request, *args, **kwargs):
         account = GmailAccount.objects.filter(
             user=request.user,
@@ -159,15 +243,27 @@ class GmailLabelsView(GenericAPIView):
             )
 
 
+
 class SyncEmailsView(GenericAPIView):
-    
-    serializer_class  = EmailSyncSerializer
+    serializer_class = EmailSyncSerializer
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        tags=["Gmail Emails"],
+        operation_summary="Synchronize Gmail emails",
+        operation_description=(
+            "Synchronize inbox messages from the connected Gmail account."
+        ),
+        request_body=EmailSyncSerializer,
+        responses={
+            200: "Email synchronization completed successfully.",
+            400: "Invalid synchronization parameters.",
+            404: "No active Gmail account found.",
+            500: "Email synchronization failed.",
+        },
+    )
     def post(self, request, *args, **kwargs):
-        serializer = self.get_serializer(
-            data=request.data,
-        )
+        serializer = self.get_serializer(data=request.data)
 
         if not serializer.is_valid():
             return ResponseInfo.validation_error(
@@ -209,3 +305,151 @@ class SyncEmailsView(GenericAPIView):
                 message="Unable to synchronize Gmail messages.",
                 error_code="EMAIL_SYNC_FAILED",
             )
+
+
+class EmailListView(ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = EmailListSchema
+
+    @swagger_auto_schema(
+        tags=["Gmail Emails"],
+        operation_summary="List Gmail emails",
+        operation_description=(
+            "Retrieve paginated emails with search, read/unread filters "
+            "and sorting."
+        ),
+        manual_parameters=[
+            openapi.Parameter(
+                "search",
+                openapi.IN_QUERY,
+                description="Search by subject, sender, recipient or email body.",
+                type=openapi.TYPE_STRING,
+            ),
+            openapi.Parameter(
+                "is_read",
+                openapi.IN_QUERY,
+                description="Filter emails by read status.",
+                type=openapi.TYPE_BOOLEAN,
+            ),
+            openapi.Parameter(
+                "ordering",
+                openapi.IN_QUERY,
+                description="Sort by received_datetime or subject. Prefix with - for descending.",
+                type=openapi.TYPE_STRING,
+                enum=[
+                    "received_datetime",
+                    "-received_datetime",
+                    "subject",
+                    "-subject",
+                ],
+            ),
+            openapi.Parameter(
+                "page",
+                openapi.IN_QUERY,
+                description="Page number.",
+                type=openapi.TYPE_INTEGER,
+            ),
+            openapi.Parameter(
+                "limit",
+                openapi.IN_QUERY,
+                description="Number of emails per page (maximum 100).",
+                type=openapi.TYPE_INTEGER,
+            ),
+        ],
+        responses={
+            200: "Emails retrieved successfully.",
+            401: "Authentication required.",
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        return EmailQueryService.get_emails(
+            user=self.request.user,
+            params=self.request.query_params,
+        )
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            paginated_data = self.get_paginated_response(
+                serializer.data,
+            ).data
+
+            return ResponseInfo.ok(
+                data=paginated_data,
+                message="Emails retrieved successfully.",
+            )
+
+        serializer = self.get_serializer(queryset, many=True)
+
+        return ResponseInfo.ok(
+            data=serializer.data,
+            message="Emails retrieved successfully.",
+        )
+
+
+
+class EmailDetailView(RetrieveAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = EmailDetailSchema
+
+    @swagger_auto_schema(
+        tags=["Gmail Emails"],
+        operation_summary="Retrieve email details",
+        operation_description=(
+            "Retrieve the complete details of an email, including its body."
+        ),
+        responses={
+            200: EmailDetailSchema,
+            404: "Email not found.",
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        return EmailQueryService.get_emails(
+            user=self.request.user,
+            params={},
+        )
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+
+        return ResponseInfo.ok(
+            data=serializer.data,
+            message="Email details retrieved successfully.",
+        )
+
+
+
+class DashboardStatsView(ListAPIView):
+    permission_classes = [IsAuthenticated]
+    pagination_class = None
+
+    @swagger_auto_schema(
+        tags=["Dashboard"],
+        operation_summary="Get dashboard statistics",
+        operation_description=(
+            "Retrieve Gmail connection status, email counts, "
+            "email rules and recent execution statistics."
+        ),
+        responses={
+            200: "Dashboard statistics retrieved successfully.",
+            401: "Authentication required.",
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        data = DashboardService.get_stats(request.user)
+
+        return ResponseInfo.ok(
+            data=data,
+            message="Dashboard statistics retrieved successfully.",
+        )
