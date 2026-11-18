@@ -42,6 +42,7 @@ services:
       - .env
 
     environment:
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
       DB_HOST: db
       DB_PORT: "5432"
       PYTHONUNBUFFERED: "1"
@@ -96,6 +97,7 @@ services:
     env_file:
       - .env
     environment:
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
       DB_HOST: db
       DB_PORT: "5432"
       CELERY_BROKER_URL: redis://redis:6379/0
@@ -125,6 +127,7 @@ services:
     env_file:
       - .env
     environment:
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
       DB_HOST: db
       DB_PORT: "5432"
       CELERY_BROKER_URL: redis://redis:6379/0
